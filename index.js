@@ -57,7 +57,7 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const db = client.db('Zap-Shift_DB');
     const parcelsCollection = db.collection('parcels');
     const paymentsCollection = db.collection('payments');
@@ -79,11 +79,16 @@ async function run() {
       res.send(result);
     })
 
+    app.get('/users', async(req, res)=>{
+      const cursor = usersCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    })
+
     //parcels API
     app.get('/parcels', async (req, res)=>{
         const query = {}
         const {email} = req.query;
-        //parcels?email=''&
         if(email){
             query.senderEmail = email;
         }
@@ -103,6 +108,7 @@ async function run() {
         const parcel = req.body;
         // Parcel creation time
         parcel.createdAt = new Date();
+        parcel.deliveryStatus = 'pending-pickup'
         const result = await parcelsCollection.insertOne(parcel);
         res.send(result);
     })
@@ -235,7 +241,7 @@ async function run() {
    })
 
    app.get('/riders', async(req, res)=>{
-    // const query = {applicationStatus: 'Pending'}
+    // const query = {applicationStatus: 'Approved'}
     const cursor = ridersCollection.find();
     const result = await cursor.toArray();
     res.send(result);
@@ -254,10 +260,10 @@ async function run() {
     res.send(result);
    })
 
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+      // "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // await client.close();
   }
@@ -270,5 +276,5 @@ app.get('/', (req, res)=>{
 })
 
 app.listen(port, ()=>{
-    console.log(`Server is running on port: ${port}`);
+    // console.log(`Server is running on port: ${port}`);
 })
