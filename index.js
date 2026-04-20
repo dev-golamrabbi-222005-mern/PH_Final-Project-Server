@@ -79,11 +79,39 @@ async function run() {
       res.send(result);
     })
 
-    app.get('/users', async(req, res)=>{
-      const cursor = usersCollection.find();
-      const result = await cursor.toArray();
-      res.send(result);
+    app.get("/users/role", async(req, res)=>{
+      try{
+        const email = req.query.email;
+        if(email !== req.decoded_email){
+          return res.status(403).send({message: "Forbidden Access"});
+        }
+        const user = await usersCollection.findOne({email});
+        res.send({role: user?.role});
+      }
+      catch (error) {
+        res.status(500).send({ error: error.message });
+      }
     })
+
+ app.get("/users/:email", verifyFirebaseToken, async (req, res) => {
+   try {
+     const email = req.params.email;
+
+     if (email !== req.decoded_email) {
+       return res.status(403).send({ message: "Forbidden Access" });
+     }
+
+     const user = await usersCollection.findOne({ email });
+
+     if (!user) {
+       return res.status(404).send({ message: "User not found" });
+     }
+
+     res.send(user);
+   } catch (error) {
+     res.status(500).send({ error: error.message });
+   }
+ });
 
     //parcels API
     app.get('/parcels', async (req, res)=>{
@@ -112,6 +140,32 @@ async function run() {
         const result = await parcelsCollection.insertOne(parcel);
         res.send(result);
     })
+
+app.patch("/parcels/:id", verifyFirebaseToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { deliveryStatus, assignedRider } = req.body;
+
+    const query = { _id: new ObjectId(id) };
+    const updates = {
+      $set: {
+        ...(deliveryStatus && { deliveryStatus }),
+        ...(assignedRider && { assignedRider }),
+        updatedAt: new Date(),
+      },
+    };
+
+    const result = await parcelsCollection.updateOne(query, updates);
+
+    if (result.modifiedCount === 0) {
+      return res.status(404).send({ message: "Parcel not found" });
+    }
+
+    res.send({ success: true, result });
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+});
 
     app.delete('/parcels/:id', async (req, res)=>{
       const id = req.params.id;
@@ -247,18 +301,118 @@ async function run() {
     res.send(result);
    })
 
-   app.patch('/riders/:id', verifyFirebaseToken, async(req, res)=>{
+app.patch("/riders/:id", verifyFirebaseToken, async (req, res) => {
+  try {
     const status = req.body.applicationStatus;
     const id = req.params.id;
-    const query = {_id: new ObjectId(id)}
+
+    // Check if user is admin (you need to implement this check)
+    const user = await usersCollection.findOne({ email: req.decoded_email });
+    if (user.role !== "admin") {
+      return res.status(403).send({ message: "Admin access required" });
+    }
+
+    const query = { _id: new ObjectId(id) };
     const updates = {
       $set: {
         applicationStatus: status,
-      }
-    }
+        reviewedAt: new Date(),
+        reviewedBy: req.decoded_email,
+      },
+    };
+
     const result = await ridersCollection.updateOne(query, updates);
     res.send(result);
-   })
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+});
+
+   app.patch(
+     "/parcels/:id/assign-rider",
+     verifyFirebaseToken,
+     async (req, res) => {
+       try {
+         const parcelId = req.params.id;
+         const { riderEmail } = req.body;
+
+         // Verify rider exists and is approved
+         const rider = await ridersCollection.findOne({
+           email: riderEmail,
+           applicationStatus: "Approved",
+         });
+
+         if (!rider) {
+           return res.status(404).send({ message: "Approved rider not found" });
+         }
+
+         const query = { _id: new ObjectId(parcelId) };
+         const updates = {
+           $set: {
+             assignedRider: riderEmail,
+             deliveryStatus: "in-transit",
+             assignedAt: new Date(),
+           },
+         };
+
+         const result = await parcelsCollection.updateOne(query, updates);
+         res.send({ success: true, result });
+       } catch (error) {
+         res.status(500).send({ error: error.message });
+       }
+     },
+   );
+
+   app.get("/statistics", verifyFirebaseToken, async (req, res) => {
+     try {
+       const user = await usersCollection.findOne({ email: req.decoded_email });
+
+       let query = {};
+
+       // If customer, only show their parcels
+       if (user.role === "customer") {
+         query.senderEmail = req.decoded_email;
+       }
+
+       // If rider, show their assigned parcels
+       if (user.role === "delivery") {
+         query.assignedRider = req.decoded_email;
+       }
+
+       const parcels = await parcelsCollection.find(query).toArray();
+       const payments = await paymentsCollection
+         .find(
+           user.role === "admin" ? {} : { customerEmail: req.decoded_email },
+         )
+         .toArray();
+
+       const riders =
+         user.role === "admin" ? await ridersCollection.find().toArray() : [];
+
+       // Calculate statistics
+       const stats = {
+         totalParcels: parcels.length,
+         pendingParcels: parcels.filter(
+           (p) => p.deliveryStatus?.toLowerCase() === "pending-pickup",
+         ).length,
+         inTransitParcels: parcels.filter((p) =>
+           p.deliveryStatus?.toLowerCase().includes("transit"),
+         ).length,
+         deliveredParcels: parcels.filter(
+           (p) => p.deliveryStatus?.toLowerCase() === "delivered",
+         ).length,
+         totalRevenue: payments.reduce((sum, p) => sum + (p.amount || 0), 0),
+         activeRiders: riders.filter((r) => r.applicationStatus === "Approved")
+           .length,
+         pendingRiders: riders.filter((r) => r.applicationStatus === "Pending")
+           .length,
+       };
+
+       res.send(stats);
+     } catch (error) {
+       res.status(500).send({ error: error.message });
+     }
+   });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
